@@ -37,13 +37,20 @@ final class StatusBarController {
         .padding(.top, 4)
 
         let host = NSHostingController(rootView: root)
-        let panel = NSWindow(contentViewController: host)
+        let panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 620, height: 500),
+            styleMask: [.titled, .closable, .resizable, .fullSizeContentView, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        panel.contentViewController = host
         panel.title = "Alto"
-        panel.setContentSize(NSSize(width: 620, height: 500))
-        panel.styleMask = [.titled, .closable, .miniaturizable]
+        panel.isFloatingPanel = true
+        panel.becomesKeyOnlyIfNeeded = false
+        panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
         panel.level = .floating
-        panel.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.center()
         self.panelWindow = panel
     }
@@ -52,13 +59,13 @@ final class StatusBarController {
         guard let panelWindow else { return }
         if panelWindow.isVisible {
             panelWindow.orderOut(nil)
-        } else {
-            popoverVM.refresh()
-            panelWindow.center()
-            NSApp.activate(ignoringOtherApps: true)
-            panelWindow.makeKeyAndOrderFront(nil)
-            panelWindow.orderFrontRegardless()
+            return
         }
+        popoverVM.refresh()
+        panelWindow.center()
+        panelWindow.orderFrontRegardless()
+        NSApp.activate(ignoringOtherApps: true)
+        panelWindow.makeKey()
     }
 
     func reloadMenu() {

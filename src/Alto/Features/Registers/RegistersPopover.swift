@@ -4,12 +4,14 @@ import UniformTypeIdentifiers
 struct RegistersPopover: View {
     @ObservedObject var vm: RegistersVM
     @State private var query: String = ""
+    @FocusState private var searchFocused: Bool
 
     var body: some View {
         VStack(spacing: 10) {
             HStack(spacing: 8) {
                 TextField("Search registers...", text: $query)
                     .textFieldStyle(.roundedBorder)
+                    .focused($searchFocused)
 
                 Button(role: .destructive) { vm.clearAll() } label: {
                     Image(systemName: "trash")
@@ -40,7 +42,10 @@ struct RegistersPopover: View {
             .frame(minWidth: 460, minHeight: 320)
         }
         .padding(12)
-        .onAppear { vm.refresh() }
+        .onAppear {
+            vm.refresh()
+            DispatchQueue.main.async { searchFocused = true }
+        }
     }
 
     private var isFiltering: Bool {
