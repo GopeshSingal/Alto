@@ -2,38 +2,41 @@ import Cocoa
 import Carbon.HIToolbox
 
 final class ClipboardHelper {
-    func pasteText(_ text: String) {
-        guard !text.isEmpty else { return }
-        let old = NSPasteboard.general.string(forType: .string)
+    func pastePayload(_ map: [String: Data]) {
+        guard !ClipboardPayload.isEmpty(map) else { return }
+        let previous = ClipboardPayload.captureFull(from: NSPasteboard.general)
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
+        ClipboardPayload.write(map, to: NSPasteboard.general)
         sendKeyCombo(cmd: true, key: kVK_ANSI_V)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-            NSPasteboard.general.clearContents()
-            if let old {
-                NSPasteboard.general.setString(old, forType: .string)
-            }
+            ClipboardPayload.restoreFull(previous, to: NSPasteboard.general)
         }
     }
 
-    func captureSelection(done: @escaping (_ text: String, _ changed: Bool) -> Void) {
+    func captureSelection(done: @escaping (_ payload: [String: Data], _ changed: Bool) -> Void) {
         let beforeCount = NSPasteboard.general.changeCount
-        let old = NSPasteboard.general.string(forType: .string)
+        let previous = ClipboardPayload.captureFull(from: NSPasteboard.general)
+        let previousWhitelist = ClipboardPayload.filterWhitelist(previous)
         sendKeyCombo(cmd: true, key: kVK_ANSI_C)
 
         let start = Date()
         func poll() {
             let changed = NSPasteboard.general.changeCount != beforeCount
             if changed || Date().timeIntervalSince(start) > 1.0 {
-                let grabbed = NSPasteboard.general.string(forType: .string) ?? ""
-                let succeeded = changed || (!grabbed.isEmpty && grabbed != old)
+                let grabbedWhitelist = ClipboardPayload.captureWhitelist(from: NSPasteboard.general)
+                let clamped = ClipboardPayload.clampedForStorage(grabbedWhitelist)
+
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) {
-                    NSPasteboard.general.clearContents()
-                    if let old {
-                        NSPasteboard.general.setString(old, forType: .string)
-                    }
+                    ClipboardPayload.restoreFull(previous, to: NSPasteboard.general)
                 }
-                done(grabbed, succeeded)
+
+                let hasPayload = !ClipboardPayload.isEmpty(clamped)
+                let differsFromBefore =
+                    ClipboardPayload.fingerprint(clamped) != ClipboardPayload.fingerprint(previousWhitelist)
+                let succeeded =
+                    hasPayload && (changed ? true : differsFromBefore)
+
+                done(clamped, succeeded)
             } else {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.01, execute: poll)
             }

@@ -25,7 +25,9 @@ final class StatusBarController {
         statusItem.button?.action = #selector(toggleCenteredPanel)
 
         popoverVM = RegistersVM(store: store)
-        let historyVM = HistoryVM(historyStore: historyStore, registerStore: store)
+        let historyVM = HistoryVM(historyStore: historyStore, registerStore: store) { [weak self] in
+            self?.popoverVM.refresh()
+        }
 
         let root = TabView {
             RegistersPopover(vm: popoverVM)

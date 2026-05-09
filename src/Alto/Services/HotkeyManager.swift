@@ -8,6 +8,7 @@ final class HotkeyManager {
     var onCopyModeEntered: (() -> Void)?
     var onClearAll: (() -> Void)?
     var onTogglePanel: (() -> Void)?
+    var onPreview: ((Int) -> Void)?
 
     private var hotkeys: [EventHotKeyRef?] = []
     private let box = HotkeyBox()
@@ -147,6 +148,12 @@ final class HotkeyManager {
             return
         }
 
+        if prefixMode == .awaitingCommand, isPreviewCommand(event) {
+            prefixMode = .awaitingPreviewRegister
+            schedulePrefixTimeout()
+            return
+        }
+
         if let register = registerForKeyEvent(event) {
             switch prefixMode {
             case .awaitingCopyRegister:
@@ -158,6 +165,10 @@ final class HotkeyManager {
                     onClearAll?()
                 } else if (1...9).contains(register) {
                     onClear?(register)
+                }
+            case .awaitingPreviewRegister:
+                if (1...9).contains(register) {
+                    onPreview?(register)
                 }
             case .awaitingCommand:
                 if (1...9).contains(register) {
@@ -188,6 +199,11 @@ final class HotkeyManager {
     private func isDeleteCommand(_ event: NSEvent) -> Bool {
         let key = event.charactersIgnoringModifiers?.lowercased()
         return key == "d" || event.keyCode == UInt16(kVK_ANSI_D)
+    }
+
+    private func isPreviewCommand(_ event: NSEvent) -> Bool {
+        let key = event.charactersIgnoringModifiers?.lowercased()
+        return key == "v" || event.keyCode == UInt16(kVK_ANSI_V)
     }
 
     private func registerForKeyEvent(_ event: NSEvent) -> Int? {
@@ -242,6 +258,7 @@ private enum PrefixMode {
     case awaitingCommand
     case awaitingCopyRegister
     case awaitingDeleteRegister
+    case awaitingPreviewRegister
 }
 
 private final class HotkeyBox {

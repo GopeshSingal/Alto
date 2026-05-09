@@ -21,21 +21,35 @@ struct RegistersPopover: View {
 
             List {
                 ForEach(filtered) { item in
-                    RegisterRowView(item: item, onClear: { vm.clear(item.index) })
-                        .onDrag {
-                            vm.beginDrag(id: item.id)
-                            return NSItemProvider(object: item.id.uuidString as NSString)
+                    RegisterRowView(
+                        item: item,
+                        onClear: { vm.clear(item.index) },
+                        onHoverChange: { hovering in
+                            guard item.hasImagePreview else { return }
+                            if hovering {
+                                RegisterPreviewController.shared.hoverShow(
+                                    payload: item.payload,
+                                    registerIndex: item.index
+                                )
+                            } else {
+                                RegisterPreviewController.shared.hoverEnd()
+                            }
                         }
-                        .onDrop(
-                            of: [UTType.text],
-                            delegate: RowDropDelegate(
-                                targetID: item.id,
-                                isEnabled: !isFiltering,
-                                draggingID: { vm.draggingID },
-                                onMove: { dragged, target in vm.move(draggedID: dragged, to: target) },
-                                onDrop: { vm.commitReorder() }
-                            )
+                    )
+                    .onDrag {
+                        vm.beginDrag(id: item.index)
+                        return NSItemProvider(object: String(item.index) as NSString)
+                    }
+                    .onDrop(
+                        of: [UTType.text],
+                        delegate: RowDropDelegate(
+                            targetID: item.index,
+                            isEnabled: !isFiltering,
+                            draggingID: { vm.draggingIndex },
+                            onMove: { dragged, target in vm.move(draggedIndex: dragged, to: target) },
+                            onDrop: { vm.commitReorder() }
                         )
+                    )
                 }
             }
             .listStyle(.plain)
@@ -55,27 +69,55 @@ struct RegistersPopover: View {
     private var filtered: [RegisterRow] {
         guard isFiltering else { return vm.rows }
         let q = query.lowercased()
-        return vm.rows.filter { $0.preview.lowercased().contains(q) }
+        return vm.rows.filter { row in
+            ClipboardPayload.plainTextPreview(row.payload, maxChars: 10_000).lowercased().contains(q)
+                || (row.badge?.lowercased().contains(q) ?? false)
+        }
     }
 }
 
 private struct RegisterRowView: View {
     let item: RegisterRow
     let onClear: () -> Void
+    let onHoverChange: (Bool) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text("[\(item.index)]")
-                    .font(.headline)
-                    .monospaced()
+            HStack(alignment: .top, spacing: 10) {
+                if item.hasImagePreview {
+                    Image(systemName: "photo.on.rectangle.angled")
+                        .font(.title2)
+                        .foregroundStyle(.secondary)
+                        .frame(width: 28, height: 28)
+                        .help(
+                        "Hover to preview image — or Ctrl+A, V, \(item.index) (toggle; repeat to close)"
+                    )
+                }
 
-                Text(item.preview)
-                    .font(.system(.body, design: .monospaced))
-                    .fontWeight(.medium)
-                    .foregroundColor(.primary)
-                    .lineLimit(2)
-                    .textSelection(.disabled)
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text("[\(item.index)]")
+                            .font(.headline)
+                            .monospaced()
+
+                        if let badge = item.badge {
+                            Text(badge)
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(.quaternary.opacity(0.6))
+                                .cornerRadius(4)
+                        }
+
+                        Text(item.preview)
+                            .font(.system(.body, design: .monospaced))
+                            .fontWeight(.medium)
+                            .foregroundColor(.primary)
+                            .lineLimit(2)
+                            .textSelection(.disabled)
+                    }
+                }
             }
 
             HStack {
@@ -85,19 +127,23 @@ private struct RegisterRowView: View {
             .buttonStyle(.bordered)
         }
         .padding(.vertical, 2)
+        .contentShape(Rectangle())
+        .onHover { onHoverChange($0) }
     }
 }
 
-struct RegisterRow: Identifiable, Equatable, Hashable {
-    let id = UUID()
+struct RegisterRow: Identifiable {
+    var id: Int { index }
     let index: Int
     let preview: String
-    let content: String
+    let badge: String?
+    let payload: PayloadMap
+    let hasImagePreview: Bool
 }
 
 final class RegistersVM: ObservableObject {
     @Published var rows: [RegisterRow] = []
-    var draggingID: UUID?
+    var draggingIndex: Int?
 
     private let store: RegisterStore
 
@@ -107,15 +153,30 @@ final class RegistersVM: ObservableObject {
 
     func refresh() {
         rows = (1...9).map { i in
-            let t = store[i]
-            let single = t.replacingOccurrences(of: "\n", with: " <nl> ")
-            let preview = single.isEmpty ? "(empty)" : (single.count > 160 ? String(single.prefix(160)) + "..." : single)
-            return RegisterRow(index: i, preview: preview, content: t)
+            let p = store[i]
+            let empty = ClipboardPayload.isEmpty(p)
+            let previewText = ClipboardPayload.plainTextPreview(p, maxChars: 160)
+            let preview: String = {
+                if empty { return "(empty)" }
+                if previewText.isEmpty {
+                    return "(\(ClipboardPayload.dominantKind(p).rawValue))"
+                }
+                return previewText
+            }()
+            let badge = ClipboardPayload.formatBadge(p)
+            let hasImage = ClipboardPayload.hasPreviewableImage(p)
+            return RegisterRow(
+                index: i,
+                preview: preview,
+                badge: badge,
+                payload: p,
+                hasImagePreview: hasImage
+            )
         }
     }
 
     func clear(_ i: Int) {
-        store[i] = ""
+        store[i] = ClipboardPayload.empty()
         store.save()
         refresh()
         HUD.shared.show("Cleared reg \(i)")
@@ -127,14 +188,15 @@ final class RegistersVM: ObservableObject {
         HUD.shared.show("All registers cleared")
     }
 
-    func beginDrag(id: UUID) {
-        draggingID = id
+    func beginDrag(id: Int) {
+        draggingIndex = id
     }
 
-    func move(draggedID: UUID, to targetID: UUID) {
-        guard let from = rows.firstIndex(where: { $0.id == draggedID }),
-              let to = rows.firstIndex(where: { $0.id == targetID }),
-              from != to else { return }
+    func move(draggedIndex: Int, to targetIndex: Int) {
+        guard let from = rows.firstIndex(where: { $0.index == draggedIndex }),
+              let to = rows.firstIndex(where: { $0.index == targetIndex }),
+              from != to
+        else { return }
         withAnimation(.easeInOut(duration: 0.12)) {
             let item = rows.remove(at: from)
             rows.insert(item, at: to)
@@ -143,7 +205,7 @@ final class RegistersVM: ObservableObject {
 
     func commitReorder() {
         for (idx, row) in rows.enumerated() {
-            store[idx + 1] = row.content
+            store[idx + 1] = row.payload
         }
         store.save()
         refresh()
@@ -152,10 +214,10 @@ final class RegistersVM: ObservableObject {
 }
 
 private struct RowDropDelegate: DropDelegate {
-    let targetID: UUID
+    let targetID: Int
     let isEnabled: Bool
-    let draggingID: () -> UUID?
-    let onMove: (UUID, UUID) -> Void
+    let draggingID: () -> Int?
+    let onMove: (Int, Int) -> Void
     let onDrop: () -> Void
 
     func validateDrop(info: DropInfo) -> Bool { isEnabled }

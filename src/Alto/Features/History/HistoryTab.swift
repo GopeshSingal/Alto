@@ -24,7 +24,7 @@ struct HistoryTab: View {
             }
 
             List(filtered) { item in
-                VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: 8) {
                     HStack {
                         Text(item.date, style: .time)
                             .font(.caption)
@@ -33,11 +33,39 @@ struct HistoryTab: View {
                         Button("Save") { pending = item }
                         Button("Delete", role: .destructive) { vm.delete(item) }
                     }
-                    Text(preview(item.text))
-                        .font(.system(.body, design: .monospaced))
-                        .fontWeight(.medium)
-                        .foregroundColor(.primary)
-                        .lineLimit(3)
+
+                    HStack(alignment: .top, spacing: 10) {
+                        if let thumb = ClipboardPayload.thumbnailNSImage(item.payload, maxPx: 112) {
+                            Image(nsImage: thumb)
+                                .resizable()
+                                .interpolation(.high)
+                                .aspectRatio(contentMode: .fit)
+                                .frame(width: 56, height: 56)
+                                .cornerRadius(6)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 6)
+                                        .strokeBorder(.secondary.opacity(0.35), lineWidth: 1)
+                                )
+                        }
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            if let badge = ClipboardPayload.formatBadge(item.payload) {
+                                Text(badge)
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(.quaternary.opacity(0.6))
+                                    .cornerRadius(4)
+                            }
+
+                            Text(previewLine(item))
+                                .font(.system(.body, design: .monospaced))
+                                .fontWeight(.medium)
+                                .foregroundColor(.primary)
+                                .lineLimit(3)
+                        }
+                    }
                 }
                 .padding(.vertical, 2)
             }
@@ -63,16 +91,21 @@ struct HistoryTab: View {
         }
     }
 
-    private func preview(_ s: String) -> String {
-        let single = s.replacingOccurrences(of: "\n", with: " <nl> ")
-        return single.count > 240 ? String(single.prefix(240)) + "..." : single
+    private func previewLine(_ item: HistoryItem) -> String {
+        let p = ClipboardPayload.plainTextPreview(item.payload, maxChars: 240)
+        if !p.isEmpty { return p }
+        let kind = ClipboardPayload.dominantKind(item.payload)
+        return "(\(kind.rawValue))"
     }
 
     private var filtered: [HistoryItem] {
         let items = vm.items
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !q.isEmpty else { return items }
-        return items.filter { $0.text.lowercased().contains(q) }
+        return items.filter { item in
+            ClipboardPayload.plainTextPreview(item.payload, maxChars: 10_000).lowercased().contains(q)
+                || (ClipboardPayload.formatBadge(item.payload)?.lowercased().contains(q) ?? false)
+        }
     }
 }
 
@@ -134,10 +167,16 @@ final class HistoryVM: ObservableObject {
 
     private let historyStore: ClipboardHistoryStore
     private let registerStore: RegisterStore
+    private let onSavedToRegister: (() -> Void)?
 
-    init(historyStore: ClipboardHistoryStore, registerStore: RegisterStore) {
+    init(
+        historyStore: ClipboardHistoryStore,
+        registerStore: RegisterStore,
+        onSavedToRegister: (() -> Void)? = nil
+    ) {
         self.historyStore = historyStore
         self.registerStore = registerStore
+        self.onSavedToRegister = onSavedToRegister
         historyStore.$items.receive(on: RunLoop.main).assign(to: &self.$items)
     }
 
@@ -147,8 +186,9 @@ final class HistoryVM: ObservableObject {
 
     func saveHistoryItem(_ item: HistoryItem, toRegister n: Int) {
         guard (1...9).contains(n) else { return }
-        registerStore[n] = item.text
+        registerStore[n] = item.payload
         registerStore.save()
+        onSavedToRegister?()
         HUD.shared.show("Saved history -> reg \(n)")
     }
 }

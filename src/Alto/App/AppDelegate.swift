@@ -6,7 +6,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hotkeys: HotkeyManager!
     private var clipboard = ClipboardHelper()
     private var historyStore = ClipboardHistoryStore()
-    private var stagedCopyText: String?
+    private var stagedPayload: PayloadMap?
     private var stagedCopyReady = false
     private var stagedCopyInFlight = false
     private var queuedSaveRegister: Int?
@@ -27,7 +27,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         hotkeys.onPaste = { [weak self] n in
             guard let self, (1...9).contains(n) else { return }
-            self.clipboard.pasteText(self.registers[n])
+            self.clipboard.pastePayload(self.registers[n])
             HUD.shared.show("Pasted -> reg \(n)")
         }
 
@@ -38,18 +38,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return
             }
 
-            if self.stagedCopyReady, let text = self.stagedCopyText, !text.isEmpty {
-                self.storeTextToRegister(text, register: n)
+            if self.stagedCopyReady,
+               let payload = self.stagedPayload,
+               !ClipboardPayload.isEmpty(payload)
+            {
+                self.storePayloadToRegister(payload, register: n)
                 self.clearStagedCopy()
                 return
             }
 
-            self.clipboard.captureSelection { text, changed in
-                if !changed {
+            self.clipboard.captureSelection { payload, succeeded in
+                if !succeeded {
                     HUD.shared.show("Copy failed (check Accessibility permission)")
                     return
                 }
-                self.storeTextToRegister(text, register: n)
+                self.storePayloadToRegister(payload, register: n)
             }
         }
 
@@ -66,7 +69,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         hotkeys.onClear = { [weak self] n in
             guard let self, (1...9).contains(n) else { return }
-            self.registers[n] = ""
+            self.registers[n] = ClipboardPayload.empty()
             self.registers.save()
             self.status.reloadMenu()
             HUD.shared.show("Cleared reg \(n)")
@@ -76,6 +79,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.status.toggleCenteredPanel()
         }
 
+        hotkeys.onPreview = { [weak self] n in
+            guard let self, (1...9).contains(n) else { return }
+            RegisterPreviewController.shared.showFromHotkey(
+                payload: self.registers[n],
+                registerIndex: n
+            )
+        }
+
         hotkeys.install()
         HUD.shared.show("Ready")
     }
@@ -83,18 +94,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func prepareStagedCopy() {
         clearStagedCopy()
         stagedCopyInFlight = true
-        clipboard.captureSelection { [weak self] text, changed in
+        clipboard.captureSelection { [weak self] payload, succeeded in
             guard let self else { return }
             self.stagedCopyInFlight = false
-            if changed && !text.isEmpty {
-                self.stagedCopyText = text
+            if succeeded, !ClipboardPayload.isEmpty(payload) {
+                self.stagedPayload = payload
                 self.stagedCopyReady = true
             }
 
             if let register = self.queuedSaveRegister {
                 self.queuedSaveRegister = nil
-                if self.stagedCopyReady, let staged = self.stagedCopyText, !staged.isEmpty {
-                    self.storeTextToRegister(staged, register: register)
+                if self.stagedCopyReady,
+                   let staged = self.stagedPayload,
+                   !ClipboardPayload.isEmpty(staged)
+                {
+                    self.storePayloadToRegister(staged, register: register)
                     self.clearStagedCopy()
                 } else {
                     HUD.shared.show("Copy failed (check Accessibility permission)")
@@ -104,17 +118,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func clearStagedCopy() {
-        stagedCopyText = nil
+        stagedPayload = nil
         stagedCopyReady = false
         stagedCopyInFlight = false
         queuedSaveRegister = nil
     }
 
-    private func storeTextToRegister(_ text: String, register n: Int) {
-        registers[n] = text
+    private func storePayloadToRegister(_ payload: PayloadMap, register n: Int) {
+        let kind = ClipboardPayload.dominantKind(payload)
+        registers[n] = payload
         registers.save()
         status.reloadMenu()
-        historyStore.add(text: text)
-        HUD.shared.show("Saved -> reg \(n)")
+        historyStore.add(payload: payload)
+        HUD.shared.show("Saved \(ClipboardPayload.hudLabel(for: kind)) -> reg \(n)")
     }
 }

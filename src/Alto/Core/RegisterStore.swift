@@ -1,37 +1,98 @@
 import Foundation
 
-final class RegisterStore {
-    private(set) var slots: [String] = Array(repeating: "", count: 10)
+typealias PayloadMap = [String: Data]
 
-    subscript(index: Int) -> String {
-        get { (0..<slots.count).contains(index) ? slots[index] : "" }
+final class RegisterStore {
+    private(set) var slots: [PayloadMap] = (0..<10).map { _ in ClipboardPayload.empty() }
+
+    subscript(index: Int) -> PayloadMap {
+        get { (0..<slots.count).contains(index) ? slots[index] : ClipboardPayload.empty() }
         set { if (0..<slots.count).contains(index) { slots[index] = newValue } }
     }
 
     func clearAll() {
         for i in 0..<slots.count {
-            slots[i] = ""
+            slots[i] = ClipboardPayload.empty()
+            try? FileManager.default.removeItem(at: slotURL(i))
         }
         save()
     }
 
-    private var fileURL: URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        let dir = base.appendingPathComponent("KeyboardRegisters", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent("registers.json")
+    private var appSupportDir: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("KeyboardRegisters", isDirectory: true)
+    }
+
+    private var slotsDir: URL {
+        appSupportDir.appendingPathComponent("slots", isDirectory: true)
+    }
+
+    private func slotURL(_ index: Int) -> URL {
+        slotsDir.appendingPathComponent("\(index).plist")
+    }
+
+    private var legacyRegistersURL: URL {
+        appSupportDir.appendingPathComponent("registers.json")
     }
 
     func load() {
-        guard let data = try? Data(contentsOf: fileURL) else { return }
-        if let arr = try? JSONDecoder().decode([String].self, from: data), arr.count == 10 {
-            slots = arr
+        try? FileManager.default.createDirectory(at: slotsDir, withIntermediateDirectories: true)
+        migrateLegacyJSONIfNeeded()
+
+        for i in 0..<slots.count {
+            slots[i] = loadSlotFile(i) ?? ClipboardPayload.empty()
         }
     }
 
-    func save() {
-        if let data = try? JSONEncoder().encode(slots) {
-            try? data.write(to: fileURL, options: .atomic)
+    private func migrateLegacyJSONIfNeeded() {
+        guard FileManager.default.fileExists(atPath: legacyRegistersURL.path) else { return }
+        guard let data = try? Data(contentsOf: legacyRegistersURL),
+              let arr = try? JSONDecoder().decode([String].self, from: data),
+              arr.count == 10
+        else {
+            return
         }
+
+        for i in 0..<10 {
+            let s = arr[i]
+            let payload = s.isEmpty ? ClipboardPayload.empty() : ClipboardPayload.plainText(s)
+            writeSlotFile(i, payload: payload)
+        }
+
+        let backup = legacyRegistersURL.deletingLastPathComponent()
+            .appendingPathComponent("registers.json.migrated")
+        try? FileManager.default.moveItem(at: legacyRegistersURL, to: backup)
+    }
+
+    func save() {
+        for i in 0..<slots.count {
+            writeSlotFile(i, payload: slots[i])
+        }
+    }
+
+    private func loadSlotFile(_ index: Int) -> PayloadMap? {
+        let url = slotURL(index)
+        guard FileManager.default.fileExists(atPath: url.path),
+              let dict = NSDictionary(contentsOf: url) as? [String: Any]
+        else { return nil }
+
+        var out: PayloadMap = [:]
+        for (keyStr, value) in dict {
+            if let d = value as? Data {
+                out[keyStr] = d
+            } else if let d = value as? NSData {
+                out[keyStr] = d as Data
+            }
+        }
+        return out
+    }
+
+    private func writeSlotFile(_ index: Int, payload: PayloadMap) {
+        let url = slotURL(index)
+        if ClipboardPayload.isEmpty(payload) {
+            try? FileManager.default.removeItem(at: url)
+            return
+        }
+        (payload as NSDictionary).write(to: url, atomically: true)
     }
 }
