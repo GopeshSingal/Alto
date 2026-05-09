@@ -18,6 +18,12 @@ final class RegisterStore {
         save()
     }
 
+    func swapRegisters(_ i: Int, _ j: Int) {
+        guard i != j, (1...9).contains(i), (1...9).contains(j) else { return }
+        slots.swapAt(i, j)
+        save()
+    }
+
     private var appSupportDir: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("KeyboardRegisters", isDirectory: true)

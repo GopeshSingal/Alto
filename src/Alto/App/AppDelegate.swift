@@ -87,6 +87,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
         }
 
+        hotkeys.onSwap = { [weak self] a, b in
+            guard let self, (1...9).contains(a), (1...9).contains(b) else { return }
+            self.registers.swapRegisters(a, b)
+            self.status.reloadMenu()
+            HUD.shared.show("Swapped reg \(a) <-> reg \(b)")
+        }
+
         hotkeys.install()
         HUD.shared.show("Ready")
     }

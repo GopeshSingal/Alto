@@ -9,6 +9,7 @@ final class HotkeyManager {
     var onClearAll: (() -> Void)?
     var onTogglePanel: (() -> Void)?
     var onPreview: ((Int) -> Void)?
+    var onSwap: ((Int, Int) -> Void)?
 
     private var hotkeys: [EventHotKeyRef?] = []
     private let box = HotkeyBox()
@@ -18,6 +19,7 @@ final class HotkeyManager {
     private let prefixKeyCode = kVK_ANSI_A
     private let prefixTimeoutSeconds: TimeInterval = 2.5
     private var prefixMode: PrefixMode = .idle
+    private var swapFirstRegister: Int?
 
     private let digitKC: [Int] = [
         kVK_ANSI_0, kVK_ANSI_1, kVK_ANSI_2, kVK_ANSI_3, kVK_ANSI_4,
@@ -154,8 +156,30 @@ final class HotkeyManager {
             return
         }
 
+        if prefixMode == .awaitingCommand, isSwapCommand(event) {
+            swapFirstRegister = nil
+            prefixMode = .awaitingSwapFirstRegister
+            schedulePrefixTimeout()
+            return
+        }
+
         if let register = registerForKeyEvent(event) {
             switch prefixMode {
+            case .awaitingSwapFirstRegister:
+                if (1...9).contains(register) {
+                    swapFirstRegister = register
+                    prefixMode = .awaitingSwapSecondRegister
+                    schedulePrefixTimeout()
+                    return
+                }
+                resetPrefixState()
+                return
+            case .awaitingSwapSecondRegister:
+                if (1...9).contains(register), let first = swapFirstRegister {
+                    onSwap?(first, register)
+                }
+                resetPrefixState()
+                return
             case .awaitingCopyRegister:
                 if (1...9).contains(register) {
                     onSave?(register)
@@ -206,6 +230,11 @@ final class HotkeyManager {
         return key == "v" || event.keyCode == UInt16(kVK_ANSI_V)
     }
 
+    private func isSwapCommand(_ event: NSEvent) -> Bool {
+        let key = event.charactersIgnoringModifiers?.lowercased()
+        return key == "s" || event.keyCode == UInt16(kVK_ANSI_S)
+    }
+
     private func registerForKeyEvent(_ event: NSEvent) -> Int? {
         if let chars = event.charactersIgnoringModifiers,
            chars.count == 1,
@@ -238,6 +267,7 @@ final class HotkeyManager {
     }
 
     private func resetPrefixState() {
+        swapFirstRegister = nil
         cancelPrefixTimeout()
         prefixMode = .idle
         removeKeyMonitors()
@@ -256,6 +286,8 @@ final class HotkeyManager {
 private enum PrefixMode {
     case idle
     case awaitingCommand
+    case awaitingSwapFirstRegister
+    case awaitingSwapSecondRegister
     case awaitingCopyRegister
     case awaitingDeleteRegister
     case awaitingPreviewRegister
